@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interfish Tech Blog</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo">Interfish</div>
+    <nav>
+      <a href="#cuda">CUDA</a>
+      <a href="#ai">AI</a>
+      <a href="#prompt">Prompt</a>
+      <a href="#nodejs">Node.js</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <h1>Tech Notes & Snippets</h1>
+  <p>关于 CUDA、AI 编程、Prompt 工程和 Node.js 开发的技术笔记与实践心得。</p>
+</section>
+
+<div class="filter-bar">
+  <button class="filter-btn active" data-filter="all">全部</button>
+  <button class="filter-btn" data-filter="cuda">CUDA</button>
+  <button class="filter-btn" data-filter="ai">AI 编程</button>
+  <button class="filter-btn" data-filter="prompt">Prompt</button>
+  <button class="filter-btn" data-filter="node">Node.js</button>
+</div>
+
+<main>
+
+  <!-- CUDA #1 -->
+  <article class="post" data-category="cuda" id="cuda">
+    <div class="post-meta">
+      <span class="tag tag-cuda">CUDA</span>
+      <span class="date">2026-02-25</span>
+    </div>
+    <h2><a href="#">使用 Shared Memory 优化矩阵乘法</a></h2>
+    <p>在 CUDA 中，全局内存的访问延迟远高于共享内存。通过将数据分块加载到 shared memory，可以显著减少全局内存访问次数，从而大幅提升矩阵乘法的性能。</p>
+    <pre><code>__global__ void matMulShared(float *A, float *B, float *C, int N) {
+    __shared__ float tileA[TILE_SIZE][TILE_SIZE];
+    __shared__ float tileB[TILE_SIZE][TILE_SIZE];
+
+    int row = blockIdx.y * TILE_SIZE + threadIdx.y;
+    int col = blockIdx.x * TILE_SIZE + threadIdx.x;
+    float sum = 0.0f;
+
+    for (int t = 0; t &lt; N / TILE_SIZE; t++) {
+        tileA[threadIdx.y][threadIdx.x] = A[row * N + t * TILE_SIZE + threadIdx.x];
+        tileB[threadIdx.y][threadIdx.x] = B[(t * TILE_SIZE + threadIdx.y) * N + col];
+        __syncthreads();
+
+        for (int k = 0; k &lt; TILE_SIZE; k++)
+            sum += tileA[threadIdx.y][k] * tileB[k][threadIdx.x];
+        __syncthreads();
+    }
+    C[row * N + col] = sum;
+}</code></pre>
+    <div class="tip">
+      <strong>Tip:</strong> <code>TILE_SIZE</code> 通常取 16 或 32。保持 tile 大小与 warp size (32) 对齐可以最大化内存合并访问效率。
+    </div>
+  </article>
+
+  <!-- CUDA #2 -->
+  <article class="post" data-category="cuda">
+    <div class="post-meta">
+      <span class="tag tag-cuda">CUDA</span>
+      <span class="date">2026-02-18</span>
+    </div>
+    <h2><a href="#">CUDA Stream 实现计算与传输重叠</a></h2>
+    <p>默认情况下 CUDA 操作是串行的。使用多个 stream 可以让数据传输和 kernel 执行并行进行，有效隐藏传输延迟。</p>
+    <pre><code>cudaStream_t stream1, stream2;
+cudaStreamCreate(&amp;stream1);
+cudaStreamCreate(&amp;stream2);
+
+// stream1: 传输前半部分数据并计算
+cudaMemcpyAsync(d_a, h_a, halfSize, cudaMemcpyHostToDevice, stream1);
+kernel&lt;&lt;&lt;gridHalf, block, 0, stream1&gt;&gt;&gt;(d_a, d_out);
+
+// stream2: 传输后半部分数据并计算
+cudaMemcpyAsync(d_a + half, h_a + half, halfSize, cudaMemcpyHostToDevice, stream2);
+kernel&lt;&lt;&lt;gridHalf, block, 0, stream2&gt;&gt;&gt;(d_a + half, d_out + half);
+
+cudaStreamSynchronize(stream1);
+cudaStreamSynchronize(stream2);</code></pre>
+    <div class="tip">
+      <strong>Tip:</strong> 使用 <code>cudaMallocHost</code> 分配 pinned memory 才能真正实现异步传输，普通 <code>malloc</code> 会退化为同步操作。
+    </div>
+  </article>
+
+  <!-- AI #1 -->
+  <article class="post" data-category="ai" id="ai">
+    <div class="post-meta">
+      <span class="tag tag-ai">AI 编程</span>
+      <span class="date">2026-02-20</span>
+    </div>
+    <h2><a href="#">用 PyTorch 实现自定义学习率调度器</a></h2>
+    <p>内置的调度器不能满足所有需求。通过继承 <code>_LRScheduler</code>，可以轻松实现 warmup + cosine decay 等复合策略。</p>
+    <pre><code>import math
+from torch.optim.lr_scheduler import _LRScheduler
+
+class WarmupCosineScheduler(_LRScheduler):
+    def __init__(self, optimizer, warmup_steps, total_steps, min_lr=1e-6):
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.min_lr = min_lr
+        super().__init__(optimizer)
+
+    def get_lr(self):
+        step = self.last_epoch
+        if step &lt; self.warmup_steps:
+            scale = step / max(1, self.warmup_steps)
+        else:
+            progress = (step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps)
+            scale = max(0, 0.5 * (1 + math.cos(math.pi * progress)))
+        return [max(self.min_lr, base_lr * scale) for base_lr in self.base_lrs]</code></pre>
+    <div class="tip">
+      <strong>Tip:</strong> Warmup 阶段一般设为总训练步数的 5%~10%，可以有效避免训练初期的梯度爆炸问题。
+    </div>
+  </article>
+
+  <!-- AI #2 -->
+  <article class="post" data-category="ai">
+    <div class="post-meta">
+      <span class="tag tag-ai">AI 编程</span>
+      <span class="date">2026-02-12</span>
+    </div>
+    <h2><a href="#">混合精度训练：用 AMP 将训练速度提升 2 倍</a></h2>
+    <p>PyTorch 的 Automatic Mixed Precision (AMP) 自动将部分运算降为 FP16，在几乎不损失精度的情况下大幅加速训练并降低显存占用。</p>
+    <pre><code>from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()
+
+for data, target in dataloader:
+    optimizer.zero_grad()
+
+    with autocast():
+        output = model(data)
+        loss = criterion(output, target)
+
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()</code></pre>
+    <div class="tip">
+      <strong>Tip:</strong> 并非所有层都适合 FP16 — <code>softmax</code>、<code>layer_norm</code> 等数值敏感操作会被 AMP 自动保留为 FP32，无需手动干预。
+    </div>
+  </article>
+
+  <!-- Prompt #1 -->
+  <article class="post" data-category="prompt" id="prompt">
+    <div class="post-meta">
+      <span class="tag tag-prompt">Prompt</span>
+      <span class="date">2026-02-22</span>
+    </div>
+    <h2><a href="#">结构化 Prompt：让 LLM 输出可控 JSON</a></h2>
+    <p>想让大语言模型稳定输出结构化数据？关键在于：明确格式要求、给出示例、限定输出边界。</p>
+    <pre><code>你是一个商品信息提取助手。从用户输入的文本中提取商品信息，
+严格按以下 JSON 格式输出，不要附加任何解释文字：
+
+{
+  "name": "商品名称",
+  "price": 数字（单位：元）,
+  "category": "分类",
+  "features": ["特点1", "特点2"]
+}
+
+示例输入：「这款蓝牙耳机只要 299 元，支持主动降噪和 30 小时续航」
+示例输出：
+{
+  "name": "蓝牙耳机",
+  "price": 299,
+  "category": "电子产品",
+  "features": ["主动降噪", "30小时续航"]
+}</code></pre>
+    <div class="tip">
+      <strong>Tip:</strong> 在 prompt 末尾添加 <code>```json</code> 开头标记可以进一步引导模型直接输出 JSON，减少多余的文本解释。
+    </div>
+  </article>
+
+  <!-- Prompt #2 -->
+  <article class="post" data-category="prompt">
+    <div class="post-meta">
+      <span class="tag tag-prompt">Prompt</span>
+      <span class="date">2026-02-15</span>
+    </div>
+    <h2><a href="#">Chain-of-Thought：用思维链提升推理准确率</a></h2>
+    <p>对于需要逻辑推理的任务，直接问答的准确率往往不高。通过引导模型「一步步思考」，可以显著提升复杂问题的回答质量。</p>
+    <pre><code># 差的 prompt
+"24 个人 3 天完成一个项目，18 个人需要几天？"
+
+# 好的 prompt（思维链引导）
+"24 个人 3 天完成一个项目，18 个人需要几天？
+请一步步推理：
+1. 先计算总工作量（人·天）
+2. 再用总工作量除以新的人数
+3. 给出最终答案"</code></pre>
+    <div class="tip">
+      <strong>Tip:</strong> 在 few-shot 示例中也展示推理过程（而非只给答案），效果会更好。这就是 Google 论文中提出的 Chain-of-Thought Prompting 的核心思路。
+    </div>
+  </article>
+
+  <!-- Node.js #1 -->
+  <article class="post" data-category="node" id="nodejs">
+    <div class="post-meta">
+      <span class="tag tag-node">Node.js</span>
+      <span class="date">2026-02-23</span>
+    </div>
+    <h2><a href="#">用 Worker Threads 实现 CPU 密集型任务并行</a></h2>
+    <p>Node.js 的单线程模型在遇到 CPU 密集任务时会阻塞事件循环。<code>worker_threads</code> 模块可以创建真正的多线程并行计算。</p>
+    <pre><code>import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
+
+if (isMainThread) {
+  const runWorker = (data) =&gt;
+    new Promise((resolve, reject) =&gt; {
+      const worker = new Worker(new URL(import.meta.url), { workerData: data });
+      worker.on('message', resolve);
+      worker.on('error', reject);
+    });
+
+  const results = await Promise.all([
+    runWorker({ start: 0, end: 5_000_000 }),
+    runWorker({ start: 5_000_000, end: 10_000_000 }),
+  ]);
+
+  console.log('Total:', results.reduce((a, b) =&gt; a + b, 0));
+} else {
+  let sum = 0;
+  for (let i = workerData.start; i &lt; workerData.end; i++) sum += i;
+  parentPort.postMessage(sum);
+}</code></pre>
+    <div class="tip">
+      <strong>Tip:</strong> Worker 创建有开销，适合长时间运算的任务。对于短任务建议使用 worker pool（如 <code>piscina</code> 库）来复用线程。
+    </div>
+  </article>
+
+  <!-- Node.js #2 -->
+  <article class="post" data-category="node">
+    <div class="post-meta">
+      <span class="tag tag-node">Node.js</span>
+      <span class="date">2026-02-10</span>
+    </div>
+    <h2><a href="#">用 AbortController 优雅取消异步操作</a></h2>
+    <p>Node.js 原生支持 <code>AbortController</code>，可以统一取消 fetch 请求、定时器、流等异步操作，避免资源泄漏。</p>
+    <pre><code>const controller = new AbortController();
+const { signal } = controller;
+
+// 5 秒超时自动取消
+setTimeout(() =&gt; controller.abort(), 5000);
+
+try {
+  const res = await fetch('https://api.example.com/data', { signal });
+  const data = await res.json();
+  console.log(data);
+} catch (err) {
+  if (err.name === 'AbortError') {
+    console.log('请求已取消（超时）');
+  } else {
+    throw err;
+  }
+}
+
+// 也可用于 EventEmitter
+import { on } from 'events';
+for await (const event of on(emitter, 'data', { signal })) {
+  process.stdout.write(event);
+}</code></pre>
+    <div class="tip">
+      <strong>Tip:</strong> 从 Node.js 20 开始，<code>AbortSignal.timeout(ms)</code> 提供了更简洁的超时写法：<code>fetch(url, { signal: AbortSignal.timeout(5000) })</code>。
+    </div>
+  </article>
+
+</main>
+
+<footer>
+  <p>&copy; 2026 Interfish &middot; Built with curiosity</p>
+</footer>
+
+<script>
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelector('.filter-btn.active').classList.remove('active');
+    btn.classList.add('active');
+    const filter = btn.dataset.filter;
+    document.querySelectorAll('.post').forEach(post => {
+      post.style.display =
+        filter === 'all' || post.dataset.category === filter ? '' : 'none';
+    });
+  });
+});
+</script>
+
+</body>
+</html>
